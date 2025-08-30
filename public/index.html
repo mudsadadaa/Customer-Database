@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Customer Database</title>
+  <style>
+    :root { --gap: 10px; }
+    body { font-family: system-ui, sans-serif; max-width: 960px; margin: 40px auto; padding: 0 12px; }
+    h1 { margin-top: 0; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+    .row { display: flex; gap: var(--gap); align-items: center; flex-wrap: wrap; }
+    input, button { padding: 8px 10px; }
+    input { border: 1px solid #ccc; border-radius: 6px; }
+    button { border: 1px solid #bbb; background: #f6f6f6; border-radius: 8px; cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    thead th { background: #f6f6f6; }
+    #msg { color: #b00; min-height: 1em; }
+    .right { margin-left: auto; }
+    .hidden { display: none; }
+    .muted { color: #666; }
+    .hint { font-size: 12px; color: #666; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>Customers</h1>
+
+  <!-- Login card -->
+  <div id="loginCard" class="card">
+    <h3>Sign in</h3>
+    <form id="loginForm" class="row" onsubmit="login(event)">
+      <input name="email" type="email" placeholder="Email" required />
+      <input name="password" type="password" placeholder="Password" required />
+      <button>Login</button>
+      <button type="button" id="demoBtn" onclick="demoLogin()">Demo Login</button>
+    </form>
+    <p class="hint">Demo? Click <strong>Demo Login</strong>. Otherwise, use email/password.</p>
+    <p id="loginMsg" class="muted"></p>
+  </div>
+
+  <!-- App card (hidden until authenticated) -->
+  <div id="appCard" class="card hidden">
+    <div class="row">
+      <strong id="whoami" class="muted"></strong>
+      <button class="right" onclick="logout()">Logout</button>
+    </div>
+
+    <form id="add" class="row" onsubmit="addClient(event)">
+      <input name="name" placeholder="Name" required />
+      <input name="email" type="email" placeholder="Email" />
+      <input name="phone" placeholder="Phone" />
+      <input name="address" placeholder="Address" />
+      <button>Add</button>
+    </form>
+    <p id="msg"></p>
+
+    <table>
+      <thead>
+        <tr><th>ID</th><th>Name</th><th>Email</th><th>Phone</th><th>Status</th><th>Actions</th></tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+  </div>
+
+  <script>
+    // ---------- auth ----------
+    async function login(e) {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const body = Object.fromEntries(fd.entries());
+      const res = await fetch('/auth/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(body)
+      });
+      if (res.ok) {
+        document.getElementById('loginMsg').textContent = '';
+        await checkAuth();
+      } else {
+        const err = await safeJson(res);
+        document.getElementById('loginMsg').textContent = err?.error || 'Login failed';
+      }
+    }
+
+    async function demoLogin() {
+      const res = await fetch('/auth/demo', { method: 'POST' });
+      if (res.ok) {
+        document.getElementById('loginMsg').textContent = '';
+        await checkAuth();
+      } else {
+        const err = await safeJson(res);
+        document.getElementById('loginMsg').textContent = err?.error || 'Demo login disabled';
+      }
+    }
+
+    async function logout() {
+      await fetch('/auth/logout', { method: 'POST' });
+      document.getElementById('whoami').textContent = '';
+      document.getElementById('appCard').classList.add('hidden');
+      document.getElementById('loginCard').classList.remove('hidden');
+    }
+
+    async function checkAuth() {
+      const me = await fetch('/me');
+      if (me.ok) {
+        const data = await me.json();
+        document.getElementById('whoami').textContent = 'Signed in as ' + data.email;
+        document.getElementById('loginCard').classList.add('hidden');
+        document.getElementById('appCard').classList.remove('hidden');
+        load();
+      } else {
+        document.getElementById('loginCard').classList.remove('hidden');
+        document.getElementById('appCard').classList.add('hidden');
+      }
+    }
+
+    // ---------- CRUD UI ----------
+    async function load() {
+      const res = await fetch('/clients');
+      if (!res.ok) {
+        document.getElementById('msg').textContent = 'Please sign in.';
+        return;
+      }
+      const rows = await res.json();
+
+      // Sort: active first, inactive last; newest (id desc) within each group
+      rows.sort((a, b) => {
+        const sa = (a.status || 'active').toLowerCase();
+        const sb = (b.status || 'active').toLowerCase();
+        if (sa !== sb) return sa === 'inactive' ? 1 : -1;
+        return b.id - a.id;
+      });
+
+      const tbody = document.getElementById('rows');
+      tbody.innerHTML = rows.map(r => `
+        <tr>
+          <td>${r.id}</td>
+          <td>${escapeHtml(r.name)}</td>
+          <td>${escapeHtml(r.email || '')}</td>
+          <td>${escapeHtml(r.phone || '')}</td>
+          <td>${(r.status || 'active')}</td>
+          <td>
+            <button onclick='editClient(
+              ${r.id},
+              ${JSON.stringify(r.name || "")},
+              ${JSON.stringify(r.email || "")},
+              ${JSON.stringify(r.phone || "")},
+              ${JSON.stringify(r.address || "")},
+              ${JSON.stringify(r.status || "active")}
+            )'>Edit</button>
+            <button onclick="delClient(${r.id})">Delete</button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    async function addClient(e) {
+      e.preventDefault();
+      const fd = new FormData(e.target);
+      const data = Object.fromEntries(fd.entries());
+
+      // quick client-side checks (server also checks)
+      if (!data.name || data.name.trim().length === 0) return show('Name is required.');
+      if (data.name.length > 100) return show('Name is too long (max 100).');
+      if (data.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(data.email)) return show('Invalid email.');
+      if (data.phone && !/^[0-9+()\-.\s]{7,20}$/.test(data.phone)) return show('Invalid phone.');
+
+      const res = await fetch('/clients', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
+      });
+
+      if (res.ok) {
+        e.target.reset();
+        show('');
+        load();
+      } else {
+        const err = await safeJson(res);
+        show(err?.error || 'Error adding client.');
+      }
+    }
+
+    async function editClient(id, name, email, phone, address, status) {
+      const newName    = prompt("Name:", name);
+      if (newName === null) return;
+
+      const newEmail   = prompt("Email:", email);
+      if (newEmail === null) return;
+
+      const newPhone   = prompt("Phone:", phone);
+      if (newPhone === null) return;
+
+      const newAddress = prompt("Address:", address);
+      if (newAddress === null) return;
+
+      const newStatusRaw  = prompt("Status (active|inactive):", status || "active");
+      if (newStatusRaw === null) return;
+      const s = String(newStatusRaw).trim().toLowerCase();
+      const newStatus = (s === 'inactive') ? 'inactive' : 'active';
+
+      const res = await fetch('/clients/' + id, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName, email: newEmail, phone: newPhone, address: newAddress, status: newStatus })
+      });
+      if (!res.ok) {
+        const err = await safeJson(res);
+        show(err?.error || 'Update failed.');
+      }
+      load();
+    }
+
+    async function delClient(id) {
+      await fetch('/clients/' + id, { method: 'DELETE' });
+      load();
+    }
+
+    // ---------- helpers ----------
+    function show(msg) { document.getElementById('msg').textContent = msg; }
+    function escapeHtml(s) {
+      return String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'","&#39;");
+    }
+    async function safeJson(res) {
+      try { return await res.json(); } catch { return null; }
+    }
+
+    // On first paint, check if we're logged in, and show the right card
+    window.onload = checkAuth;
+  </script>
+</body>
+</html>
