@@ -8,7 +8,7 @@
 > A compact full-stack demo that manages customers with **session login**, **client+server validation**, and a **1-command Cloud Run deploy**. Inactive customers automatically sink to the bottom for cleaner ops.
 
 **Live Demo:** https://customer-database-273912255588.us-west1.run.app  
-**Repository:** https://github.com/yourname/customer-database  ← replace with your repo URL
+**Repository:** https://github.com/JustisDutt/Customer-Database
 
 ---
 
